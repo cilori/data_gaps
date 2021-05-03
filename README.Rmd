@@ -1,0 +1,14 @@
+---
+title: "Data gaps"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This repository contains scripts to fill missing pixels in satellite data using `metR::ImputeEOF()`.  
+
+
+
+
