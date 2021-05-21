@@ -13,7 +13,7 @@ ImputeEOF2 <- function(formula, max.eof = NULL, data = NULL,
                       validation = NULL, verbose = interactive(), num_rows,
                       CV_pixels=NULL, all_years, available_time=NULL) {
     
-    # Build matrix.
+    # check formula and stop if the variable to fill has no missing data
     f <- stringr::str_split(as.character(formula), "~", n = 2)[[1]]
     dcast.formula <- stringr::str_squish(f[stringr::str_detect(f, "\\|")])
     dcast.formula <- as.formula(stringr::str_replace(dcast.formula, "\\|", "~"))
@@ -24,17 +24,19 @@ ImputeEOF2 <- function(formula, max.eof = NULL, data = NULL,
         return(data[[value.var]])
     }
     
-    # temporary replacement code specific to dfo gap filling needs (simpler/faster)
-    # note: this won't work if you remove entries with NA "var" from the input dataframe,
+    # Build matrix
+    
+    # This is temporary replacement code specific to DFO gap filling needs (simpler/faster)
+    # NOTE1: this won't work if you remove entries with NA "var" from the input dataframe,
     # and possibly not if you are filling multiple years
-    # ALSO NOTE: I don't understand why, but byrow=TRUE is the correct way to do this here...
-    #     even though df should be written column-wise to get row_pixel x column_day
+    # NOTE2: I don't understand why, but byrow=TRUE is the correct way to do this here...
+    # even though df should be written column-wise to get row_pixel x column_day
     all_X <- list()
     all_id <- list()
     for (i in 1:length(all_years)) {
         y <- all_years[i]
         tmp_df <- data %>% dplyr::filter(floor(time)==y)
-        all_X[[i]] <- matrix(tmp_df$var, nrow=num_pix$NWA[["4km"]], byrow=TRUE)
+        all_X[[i]] <- matrix(tmp_df$var, nrow=num_rows, byrow=TRUE)
         tmp_id <- c(matrix(1:nrow(tmp_df), nrow=num_rows, byrow=TRUE))
         if (i>1) {tmp_id <- tmp_id + max(all_id[[i-1]])}
         all_id[[i]] <- tmp_id
@@ -44,8 +46,7 @@ ImputeEOF2 <- function(formula, max.eof = NULL, data = NULL,
     
     if (is.null(max.eof)) max.eof <- min(ncol(X), nrow(X))
     gaps <- which(is.na(X))
-    # if (length(gaps) == 0) return(X)
-
+    
     # get the number of points to use in validation
     if (is.null(validation)) {
         validation <- max(30, 0.1*length(X[-gaps]))
@@ -54,20 +55,17 @@ ImputeEOF2 <- function(formula, max.eof = NULL, data = NULL,
     validation <- sample(seq_along(X)[!seq_along(X) %in% gaps], validation)
     
     
+    # use old CV pixels for target year
+    if (!is.null(CV_pixels)) {
+        inds_bef_target_year <- sum(sapply(1:num_years, function(i) length(available_time[[i]]))) * num_rows
+        len_target_year <- length(available_time[[floor(length(available_time)/2)+1]]) * num_rows
+        CV_mat <- matrix(CV_pixels, nrow=num_rows, byrow=TRUE)
+        CV_pixels <- which(is.finite(CV_mat))
+        validation <- validation[validation <= inds_bef_target_year | validation > (inds_bef_target_year+len_target_year)]
+        validation <- sort(c(validation, CV_pixels+inds_bef_target_year))
+    }
     
     
-    
-    
-    # somewhere in here you need to squeeze in the existing CV pixels
-    # remember, byrow=TRUE when it's reshaped
-    
-    # use all_years, available_time
-    
-    
-    
-    
-    
-
     eofs <- c(0, min.eof:max.eof)
     X.rec <- X
     # First try, imput with mean or something. Rmse is infinite.
@@ -81,6 +79,7 @@ ImputeEOF2 <- function(formula, max.eof = NULL, data = NULL,
         X.rec <- .ImputeEOF1(X.rec, c(gaps, validation), eofs[i],
                              tol = tol, max.iter = max.iter,
                              verbose = verbose, prev = prev)
+        
         prev <- X.rec$prval
         X.rec <- X.rec$X.rec
         
@@ -99,7 +98,6 @@ ImputeEOF2 <- function(formula, max.eof = NULL, data = NULL,
     
     validation_pixels <- matrix(nrow=nrow(X.rec), ncol=ncol(X.rec))
     validation_pixels[validation] <- X.rec[validation]
-    validation_pixels <- c(validation_pixels)[order(id)]
     
     # Select best eof and make proper imputation.
     eof <- eofs[which.min(rmse)]
@@ -109,6 +107,7 @@ ImputeEOF2 <- function(formula, max.eof = NULL, data = NULL,
     
     if (is.data.frame(data)) {
         X.rec <- c(X.rec)[order(id)]
+        validation_pixels <- c(validation_pixels)[order(id)]
     }
     
     attr(X.rec, "eof") <- eof

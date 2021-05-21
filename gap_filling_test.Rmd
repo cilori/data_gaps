@@ -704,7 +704,10 @@ If more satellite images are used in the algorithm, will it improve the results?
 
 Hilborn and Costa (2018) found that pixel reconstruction improved with more data in a smaller region on the Canadian Pacific coast. Up until this point we have only used one year of data to fill the gaps, but here we'll try adding more (an equal number of years on either side of the target year, `r year`).  
 
-WARNING! Currently the 1year/3year/5year comparisons do not use the same CV pixels for 2015 (this will be updated soon for a more accurate comparison).  
+Note that the 3year/5year DINEOF runs use the same cross-validation pixels for `r year` with extra randomly-selected pixels from the remaining years. Also, the CV regression below is performed using only the CV pixels for `r year` to give a more accurate comparison between methods.  
+
+Overall, expanding the time series seems to give a slight improvement to the results. Based on the RMSE summary plot at the bottom, it appears as though the best results are achieved when using ~ 3 years of data to fill the gaps, after which there are only very slight improvements to weeks with good percent coverage, and the RMSE for weeks with bad percent coverage starts rising.  
+
 
 
 #### <b>1 year</b>
@@ -776,6 +779,8 @@ matchups <- dplyr::left_join(df, in_situ_df %>% dplyr::rename(time=time_week), b
 
 isp <- matchup_plot(matchups)
 
+stats_to_plot <- cbind(rep(1,4), c("EOF", "RMSE", paste0("Week",weeks,"_RMSE")), c(attr_df$eof, attr_df$rmse, week_rmses))
+
 cat("Number of EOF:", attr_df$eof, "\n",
     "Total RMSE:", attr_df$rmse, "\n",
     "Week", weeks[1], "RMSE:", week_rmses[1], "\n",
@@ -826,7 +831,7 @@ map2 <- make_map(data.frame(bin=nwa_bins_4km,
                 log_raster=TRUE)
 
 # perform linear regression on all cross-validation pixels, and extract stats
-cv_df <- df %>% dplyr::filter(is.finite(validation_pixels))
+cv_df <- df %>% dplyr::filter(is.finite(validation_pixels) & floor(time)==year)
 tab <- cv_tab(cv_df)
 p <- cv_plot(cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,"CV regression - all pixels")
 
@@ -856,6 +861,8 @@ matchups <- dplyr::left_join(df, in_situ_df %>% dplyr::rename(time=time_week), b
   dplyr::arrange(Satellite, time)
 
 isp <- matchup_plot(matchups)
+
+stats_to_plot <- rbind(stats_to_plot, cbind(rep(num_years*2+1,4), c("EOF", "RMSE", paste0("Week",weeks,"_RMSE")), c(attr_df$eof, attr_df$rmse, week_rmses)))
 
 cat("Number of EOF:", attr_df$eof, "\n",
     "Total RMSE:", attr_df$rmse, "\n",
@@ -907,7 +914,7 @@ map2 <- make_map(data.frame(bin=nwa_bins_4km,
                 log_raster=TRUE)
 
 # perform linear regression on all cross-validation pixels, and extract stats
-cv_df <- df %>% dplyr::filter(is.finite(validation_pixels))
+cv_df <- df %>% dplyr::filter(is.finite(validation_pixels) & floor(time)==year)
 tab <- cv_tab(cv_df)
 p <- cv_plot(cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,"CV regression - all pixels")
 
@@ -938,6 +945,8 @@ matchups <- dplyr::left_join(df, in_situ_df %>% dplyr::rename(time=time_week), b
 
 isp <- matchup_plot(matchups)
 
+stats_to_plot <- rbind(stats_to_plot, cbind(rep(num_years*2+1,4), c("EOF", "RMSE", paste0("Week",weeks,"_RMSE")), c(attr_df$eof, attr_df$rmse, week_rmses)))
+
 cat("Number of EOF:", attr_df$eof, "\n",
     "Total RMSE:", attr_df$rmse, "\n",
     "Week", weeks[1], "RMSE:", week_rmses[1], "\n",
@@ -945,6 +954,115 @@ cat("Number of EOF:", attr_df$eof, "\n",
 grid.arrange(grobs=list(map1,map2,isp,p1,p2,p), nrow=2)
 
 ```
+
+
+
+
+#### <b>7 years</b>
+
+```{r}
+
+num_years <- 3
+
+variable <- "CHL_POLY4"
+region <- "NWA"
+input_years <- ifelse(num_years==0, year, paste0(range(plus_minus(year,num_years)), collapse="-"))
+input_name <- paste0("output/filled_", region, "_", sensor, "_", variable, "_", input_years, "_")
+
+fill_log <- TRUE
+
+# load data
+composite <- "8day"
+file <- paste0(input_name, composite, ifelse(fill_log, "_logged", ""), "_randomCVpts")
+df <- as.data.table(read_fst(paste0(file, ".fst")))
+load(paste0(file, "_attr.rda"))
+
+# format
+df_2015 <- df %>% dplyr::filter(floor(time)==year)
+num_weeks <- dim(df_2015)[1]/num_pix$NWA$`4km`
+available_weeks <- as.integer(round(sort(unique((df_2015$time-year)*46 + 1))))
+mat_var <- matrix(df_2015$var, ncol=num_weeks, byrow=TRUE)
+mat_var_imputed <- matrix(df_2015$var_imputed, ncol=num_weeks, byrow=TRUE)
+
+# make maps for each week
+map1 <- make_map(data.frame(bin=nwa_bins_4km,
+                            var=mat_var[,available_weeks==weeks[1]],
+                            var_imputed=mat_var_imputed[,available_weeks==weeks[1]],
+                            stringsAsFactors = FALSE),
+                title=paste0("8day filled - week ",weeks[1]),
+                log_raster=TRUE)
+map2 <- make_map(data.frame(bin=nwa_bins_4km,
+                            var=mat_var[,available_weeks==weeks[2]],
+                            var_imputed=mat_var_imputed[,available_weeks==weeks[2]],
+                            stringsAsFactors = FALSE),
+                title=paste0("8day filled - week ",weeks[2]),
+                log_raster=TRUE)
+
+# perform linear regression on all cross-validation pixels, and extract stats
+cv_df <- df %>% dplyr::filter(is.finite(validation_pixels) & floor(time)==year)
+tab <- cv_tab(cv_df)
+p <- cv_plot(cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,"CV regression - all pixels")
+
+# do the same with individual selected weeks to test
+week1_cv_df <- cv_df %>% dplyr::filter(time==(year + (weeks[1]-1)/46))
+week2_cv_df <- cv_df %>% dplyr::filter(time==(year + (weeks[2]-1)/46))
+if (fill_log) {
+  week_rmses <- c(rmse(log10(week1_cv_df$var), log10(week1_cv_df$validation_pixels)),
+                  rmse(log10(week2_cv_df$var), log10(week2_cv_df$validation_pixels)))
+} else {
+  week_rmses <- c(rmse(week1_cv_df$var, week1_cv_df$validation_pixels),
+                  rmse(week2_cv_df$var, week2_cv_df$validation_pixels))
+}
+tab <- cv_tab(week1_cv_df)
+p1 <- cv_plot(week1_cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,paste0("CV regression - week ", weeks[1]))
+tab <- cv_tab(week2_cv_df)
+p2 <- cv_plot(week2_cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,paste0("CV regression - week ", weeks[2]))
+
+# remove repetitive axis titles/scales
+p2 <- p2 + theme(axis.title.y=element_blank(), axis.text.y=element_blank())
+p <- p + theme(axis.title.y=element_blank(), axis.text.y=element_blank())
+
+matchups <- dplyr::left_join(df, in_situ_df %>% dplyr::rename(time=time_week), by=c("bin", "time")) %>%
+  dplyr::filter(is.finite(ID)) %>%
+  dplyr::rename(Real=var, Filled=validation_pixels) %>%
+  tidyr::pivot_longer(cols=c(Real, Filled), names_to="Satellite", values_to="sat_chla", values_drop_na=TRUE) %>%
+  dplyr::arrange(Satellite, time)
+
+isp <- matchup_plot(matchups)
+
+stats_to_plot <- rbind(stats_to_plot, cbind(rep(num_years*2+1,4), c("EOF", "RMSE", paste0("Week",weeks,"_RMSE")), c(attr_df$eof, attr_df$rmse, week_rmses)))
+
+cat("Number of EOF:", attr_df$eof, "\n",
+    "Total RMSE:", attr_df$rmse, "\n",
+    "Week", weeks[1], "RMSE:", week_rmses[1], "\n",
+    "Week", weeks[2], "RMSE:", week_rmses[2])
+grid.arrange(grobs=list(map1,map2,isp,p1,p2,p), nrow=2)
+
+```
+
+
+
+#### <b>Summary</b>
+
+```{r fig.width=5, fig.height=4}
+
+stats_to_plot <- data.frame(stats_to_plot, stringsAsFactors = FALSE)
+colnames(stats_to_plot) <- c("Number of years", "Statistic", "Value")
+stats_to_plot$Value <- as.numeric(stats_to_plot$Value)
+stats_to_plot$Statistic <- as.factor(stats_to_plot$Statistic)
+
+cat("Number of EOFs for 1/3/5/7 years:", paste0((stats_to_plot %>% dplyr::filter(Statistic == "EOF"))$Value, collapse="/"))
+
+ggplot(stats_to_plot %>% dplyr::filter(Statistic != "EOF")) +
+  geom_point(aes(x=`Number of years`, y=Value, color=Statistic)) +
+  geom_line(aes(x=`Number of years`, y=Value, color=Statistic, group=Statistic)) +
+  theme_bw() +
+  scale_y_log10() +
+  theme(axis.title.y=element_blank())
+
+
+```
+
 
 
 

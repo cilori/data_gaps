@@ -44,7 +44,7 @@ high_chla <- 64
 # for 8day, how many years to use on either side of the target year?
 # if filling gaps for weekly data, you can load a few years at a time
 # if filling gaps in daily data, you can only load ~ 1 year
-num_years <- 2 # default = 4 (for 8day filling)
+num_years <- 3 # default = 4 (for 8day filling)
 
 # log the data before filling? (for CHL)
 fill_log <- TRUE
@@ -152,25 +152,28 @@ if (fill_log) {
     df[good_ind,"var"] <- log10(df[good_ind,"var"])
 }
 
-
-
-
-
-
-
-# IF NUM_YEARS > 0, YOU NEED TO GET THE CROSS-VALIDATION PIXELS ALREADY USED IN OTHER FILES TO DO A DIRECT COMPARISON
-# just get the cv pixels used in 2015, and use only those... the other years can do what they want
-
-
-
-
-
-
-
-filled_data <- ImputeEOF2(formula = "var ~ lat + lon | time",
-                          data = df,
-                          num_rows = length(output_bins),
-                          tol = ifelse(fill_log, 0.001, 0.01))
+# get existing CV pixels from the main year
+if (num_years > 0) {
+    CV_pixels <- read_fst(paste0(output_path, "/filled_", region, "_", sensor, "_", variable, "_", year, "_", composite,
+                                 ifelse(fill_log, "_logged", ""), "_randomCVpts.fst")) %>%
+        dplyr::filter(floor(time)==year)
+    CV_pixels <- CV_pixels$validation_pixels
+    all_years <- sort(unique(floor(df$time)))
+    available_time <- lapply(all_years, function(y) as.integer(round(sort(unique(((df %>% dplyr::filter(floor(time)==y))$time-y)*46 + 1)))))
+    filled_data <- ImputeEOF2(formula = "var ~ lat + lon | time",
+                              data = df,
+                              num_rows = length(output_bins),
+                              tol = ifelse(fill_log, 0.001, 0.01),
+                              CV_pixels = CV_pixels,
+                              all_years=all_years,
+                              available_time=available_time)
+} else {
+    filled_data <- ImputeEOF2(formula = "var ~ lat + lon | time",
+                              data = df,
+                              num_rows = length(output_bins),
+                              tol = ifelse(fill_log, 0.001, 0.01),
+                              all_years=year)
+}
 
 df$var_imputed <- filled_data$X_filled
 df$validation_pixels <- filled_data$validation_pixels
