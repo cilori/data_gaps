@@ -4,10 +4,14 @@
 # Changes:
 #       - return indices of validation points
 #       - add temporary simplified/faster code to make a matrix from a datatable
+#       - CV_pixels: when you fill gaps using only one year of data, a vector of cross-validation pixels is created.
+#           To help compare this to gap filling with multiple years of data, you can re-use that same CV vector for
+#           the target year (and more CV pixels will be added for the extra years)
 
 ImputeEOF2 <- function(formula, max.eof = NULL, data = NULL,
                       min.eof = 1, tol = 1e-2, max.iter = 10000,
-                      validation = NULL, verbose = interactive(), num_rows) {
+                      validation = NULL, verbose = interactive(), num_rows,
+                      CV_pixels=NULL, all_years, available_time=NULL) {
     
     # Build matrix.
     f <- stringr::str_split(as.character(formula), "~", n = 2)[[1]]
@@ -20,18 +24,23 @@ ImputeEOF2 <- function(formula, max.eof = NULL, data = NULL,
         return(data[[value.var]])
     }
     
-    # # temporary replacement code specific to dfo gap filling needs (simpler/faster)
-    # # note: this won't work if you remove entries with NA "var" from the input dataframe,
-    # # and possibly not if you are filling multiple years
-    # # ALSO NOTE: I don't understand why, but byrow=TRUE is the correct way to do this here...
-    # #     even though df should be written column-wise to get row_pixel x column_day
-    # id = c(matrix(1:nrow(data), nrow=num_rows, byrow=TRUE))
-    # X = matrix(data$var, nrow=num_rows, byrow=TRUE)
-    
-    g <- .tidy2matrix(data, dcast.formula, value.var)
-    data$ff19bdd67ff5f59cdce2824074707d20 <- 1:nrow(data)
-    id <- c(.tidy2matrix(data, dcast.formula, "ff19bdd67ff5f59cdce2824074707d20")$matrix)
-    X <- g$matrix
+    # temporary replacement code specific to dfo gap filling needs (simpler/faster)
+    # note: this won't work if you remove entries with NA "var" from the input dataframe,
+    # and possibly not if you are filling multiple years
+    # ALSO NOTE: I don't understand why, but byrow=TRUE is the correct way to do this here...
+    #     even though df should be written column-wise to get row_pixel x column_day
+    all_X <- list()
+    all_id <- list()
+    for (i in 1:length(all_years)) {
+        y <- all_years[i]
+        tmp_df <- data %>% dplyr::filter(floor(time)==y)
+        all_X[[i]] <- matrix(tmp_df$var, nrow=num_pix$NWA[["4km"]], byrow=TRUE)
+        tmp_id <- c(matrix(1:nrow(tmp_df), nrow=num_rows, byrow=TRUE))
+        if (i>1) {tmp_id <- tmp_id + max(all_id[[i-1]])}
+        all_id[[i]] <- tmp_id
+    }
+    X <- do.call(cbind, all_X)
+    id <- as.numeric(do.call(c, all_id))
     
     if (is.null(max.eof)) max.eof <- min(ncol(X), nrow(X))
     gaps <- which(is.na(X))
@@ -43,6 +52,21 @@ ImputeEOF2 <- function(formula, max.eof = NULL, data = NULL,
     }
     set.seed(42)    # let's get reproducible in here.
     validation <- sample(seq_along(X)[!seq_along(X) %in% gaps], validation)
+    
+    
+    
+    
+    
+    
+    # somewhere in here you need to squeeze in the existing CV pixels
+    # remember, byrow=TRUE when it's reshaped
+    
+    # use all_years, available_time
+    
+    
+    
+    
+    
 
     eofs <- c(0, min.eof:max.eof)
     X.rec <- X
@@ -117,29 +141,4 @@ ImputeEOF2 <- function(formula, max.eof = NULL, data = NULL,
             return(list(X.rec = X.rec, prval = prval))
         }
     }
-}
-
-.tidy2matrix <- function(data, formula, value.var, fill = NULL, ...) {
-    row.vars <- all.vars(formula[[2]])
-    col.vars <- all.vars(formula[[3]])
-    data <- data.table::as.data.table(data)
-    data[, row__ := .GRP, by = c(row.vars)]
-    data[, col__ := .GRP, by = c(col.vars)]
-    if (is.null(fill)){
-        fill <- 0
-        # rowdims <- data[col__ == 1, (row.vars), with = FALSE]
-        # coldims <- data[row__ == 1, (col.vars), with = FALSE]
-    } else {
-        # rowdims <- unique(data[, (row.vars), with = FALSE])
-        # coldims <- unique(data[, (col.vars), with = FALSE])
-    }
-    rowdims <- unique(data[, (row.vars), with = FALSE])
-    coldims <- unique(data[, (col.vars), with = FALSE])
-    data.m <- matrix(fill[1], nrow = max(data[["row__"]]),
-                     ncol = max(data[["col__"]]))
-    data.m[cbind(data[["row__"]], data[["col__"]])] <- data[[value.var]]
-    
-    return(list(matrix = data.m,
-                coldims = coldims,
-                rowdims = rowdims))
 }
