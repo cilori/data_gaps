@@ -44,12 +44,12 @@ high_chla <- 64
 # for 8day, how many years to use on either side of the target year?
 # if filling gaps for weekly data, you can load a few years at a time
 # if filling gaps in daily data, you can only load ~ 1 year
-num_years <- 3 # default = 4 (for 8day filling)
+num_years <- 1 # default = 4 (for 8day filling)
 
 # log the data before filling? (for CHL)
 fill_log <- TRUE
 
-# fill gaps in these composites, daily or 8day
+# fill gaps in 8day or daily images
 composite <- "8day"
 
 
@@ -120,8 +120,12 @@ if (file.exists(file.path(path, attr_filename))) {
                           rmse=numeric(),
                           num_LE_zero=integer(),
                           processing_time=character(),
+                          time_to_process=numeric(),
                           stringsAsFactors=FALSE)
 }
+
+
+ptm <- Sys.time()
 
 # get input files
 file_list <- sort(list.files(file.path(path, sensor, variable, region, "annual_fst")))
@@ -134,17 +138,16 @@ print(file_list)
 df <- lapply(file_list,
              load_and_subset,
              path=file.path(path, sensor, variable, region, "annual_fst"),
-             input_region=region,
              input_bins=input_bins,
-             input_lats=input_lats,
-             input_lons=input_lons,
+             output_lats=output_lats,
+             output_lons=output_lons,
              output_bins=output_bins,
              low_percov=low_percov,
              temporal_resolution=composite)
 df <- do.call(dplyr::bind_rows, df)
 
 # set values outside acceptable boundaries to NA
-df[df$var < low_chla | df$var > high_chla,"var"] <- NA
+df[is.finite(df$var) & (df$var < low_chla | df$var > high_chla), "var"] <- NA
 
 if (fill_log) {
     good_ind <- is.finite(df$var) & df$var > 0
@@ -160,7 +163,7 @@ if (num_years > 0) {
     CV_pixels <- CV_pixels$validation_pixels
     all_years <- sort(unique(floor(df$time)))
     available_time <- lapply(all_years, function(y) as.integer(round(sort(unique(((df %>% dplyr::filter(floor(time)==y))$time-y)*46 + 1)))))
-    filled_data <- ImputeEOF2(formula = "var ~ lat + lon | time",
+    filled_data <- ImputeEOF2(formula = "var ~ lon + lat | time",
                               data = df,
                               num_rows = length(output_bins),
                               tol = ifelse(fill_log, 0.001, 0.01),
@@ -198,6 +201,7 @@ attr_df <- dplyr::bind_rows(attr_df,
                                        rmse=attr(df$var_imputed, "rmse"),
                                        num_LE_zero=num_LE_zero,
                                        processing_time=format(Sys.time(), "%Y%m%d_%H%M%S"),
+                                       time_to_process=as.numeric(Sys.time()-ptm, units="secs"),
                                        stringsAsFactors = FALSE))
 
 write_fst(df %>% dplyr::select(bin, time, var, var_imputed, validation_pixels),

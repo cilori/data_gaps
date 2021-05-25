@@ -29,15 +29,13 @@ ImputeEOF2 <- function(formula, max.eof = NULL, data = NULL,
     # This is temporary replacement code specific to DFO gap filling needs (simpler/faster)
     # NOTE1: this won't work if you remove entries with NA "var" from the input dataframe,
     # and possibly not if you are filling multiple years
-    # NOTE2: I don't understand why, but byrow=TRUE is the correct way to do this here...
-    # even though df should be written column-wise to get row_pixel x column_day
     all_X <- list()
     all_id <- list()
     for (i in 1:length(all_years)) {
         y <- all_years[i]
         tmp_df <- data %>% dplyr::filter(floor(time)==y)
-        all_X[[i]] <- matrix(tmp_df$var, nrow=num_rows, byrow=TRUE)
-        tmp_id <- c(matrix(1:nrow(tmp_df), nrow=num_rows, byrow=TRUE))
+        all_X[[i]] <- matrix(tmp_df$var, nrow=num_rows)
+        tmp_id <- c(matrix(1:nrow(tmp_df), nrow=num_rows))
         if (i>1) {tmp_id <- tmp_id + max(all_id[[i-1]])}
         all_id[[i]] <- tmp_id
     }
@@ -59,7 +57,7 @@ ImputeEOF2 <- function(formula, max.eof = NULL, data = NULL,
     if (!is.null(CV_pixels)) {
         inds_bef_target_year <- sum(sapply(1:num_years, function(i) length(available_time[[i]]))) * num_rows
         len_target_year <- length(available_time[[floor(length(available_time)/2)+1]]) * num_rows
-        CV_mat <- matrix(CV_pixels, nrow=num_rows, byrow=TRUE)
+        CV_mat <- matrix(CV_pixels, nrow=num_rows)
         CV_pixels <- which(is.finite(CV_mat))
         validation <- validation[validation <= inds_bef_target_year | validation > (inds_bef_target_year+len_target_year)]
         validation <- sort(c(validation, CV_pixels+inds_bef_target_year))

@@ -1,14 +1,24 @@
 # function to load an annual fst file, remove days/weeks with low percent coverage,
 # and subset it to the desired region if necessary
-load_and_subset <- function(f, path, input_region, input_bins, input_lats, input_lons,
-                            output_bins=NULL, low_percov=0, spatial_resolution="4km",
-                            temporal_resolution="daily") {
+load_and_subset <- function(f, path, input_bins,
+                            output_lats, output_lons, output_bins=input_bins,
+                            low_percov=0, temporal_resolution="daily") {
     
     fsplit <- as.numeric(substr(strsplit(f, "_")[[1]], 1, 4))
     year <- as.numeric(fsplit[is.finite(fsplit)])
     
     sat_data <- read_fst(file.path(path, f))
-    sat_mat <- matrix(sat_data$var, nrow=num_pix[[input_region]][[spatial_resolution]])
+    
+    # read input data and reduce to output bins if necessary
+    if (!identical(input_bins,output_bins)) {
+        num_input_days <- nrow(sat_data)/length(input_bins)
+        sat_data <- sat_data %>%
+            dplyr::mutate(bin = rep(input_bins, num_input_days)) %>%
+            dplyr::filter(bin %in% output_bins) %>%
+            dplyr::select(var)
+    }
+
+    sat_mat <- matrix(sat_data$var, nrow=length(output_bins))
     
     if (temporal_resolution=="daily") {
         full_num_composites <- ifelse(leap_year(year),366,365)
@@ -19,15 +29,14 @@ load_and_subset <- function(f, path, input_region, input_bins, input_lats, input
     
     num_composites <- ncol(sat_mat)
     
-    good_percov_ind <- 100 * colSums(is.finite(sat_mat)) / num_pix[[input_region]][[spatial_resolution]] >= low_percov
-    df <- dplyr::left_join(data.frame(bin = output_bins, stringsAsFactors = FALSE),
-                           data.frame(var = as.numeric(sat_mat[,good_percov_ind])) %>%
-                               dplyr::mutate(bin = rep(input_bins, sum(good_percov_ind)),
-                                             lat = rep(input_lats, sum(good_percov_ind)),
-                                             lon = rep(input_lons, sum(good_percov_ind)),
-                                             time = year + (rep((1:num_composites)[good_percov_ind], each=num_pix[[input_region]][[spatial_resolution]]) - 1)/full_num_composites),
-                           by="bin") %>%
-        as.data.table()
+    good_percov_ind <- 100 * colSums(is.finite(sat_mat)) / length(output_bins) >= low_percov
+    
+    df <- data.frame(bin = rep(output_bins, sum(good_percov_ind)),
+                     lat = rep(output_lats, sum(good_percov_ind)),
+                     lon = rep(output_lons, sum(good_percov_ind)),
+                     time = year + (rep((1:num_composites)[good_percov_ind], each=length(output_bins)) - 1)/full_num_composites,
+                     var = as.numeric(sat_mat[,good_percov_ind]),
+                     stringsAsFactors = FALSE)
     
     return(df)
     
