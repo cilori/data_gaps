@@ -23,6 +23,7 @@ library(broom)
 library(gridExtra)
 library(geodist)
 library(patchwork)
+source("gap_filling_test_functions.R")
 data("wrld_simpl", package = "maptools")
 
 data("nwa_bins_4km")
@@ -43,80 +44,6 @@ high_chla <- 64
 
 # maximum distance allowed between satellite pixel and in situ measurement (in metres)
 max_is_dist <- 10000
-
-
-#*******************************************************************************
-# custom functions
-
-make_map <- function(df,title,log_raster=FALSE) {
-    r1 <- var_to_rast(df %>% dplyr::select(bin, var))
-    r2 <- var_to_rast(df %>% dplyr::select(bin, var_imputed))
-    rextent <- raster::extent(c(xmn=lons[1], xmx=lons[2], ymn=lats[1], ymx=lats[2]))
-    r1 <- crop(r1, rextent)
-    r2 <- crop(r2, rextent)
-    if (log_raster) {
-      r1 <- log10(r1)
-      r2 <- log10(r2)
-    }
-    r <- raster::stack(r1,r2)
-    names(r) <- c("Original", "Filled")
-    return(spplot(r, main=title, zlim=c(-1.5,2)) + latticeExtra::layer(sp::sp.polygons(wrld_simpl)))
-}
-
-cv_plot <- function(cv_df,intercept,slope,tab,title) {
-  breaks <- c(0.01,0.1,1,10,100)
-  ggplot(cv_df, aes(x=var, y=validation_pixels)) +
-        stat_binhex(bins=80) +
-        scale_fill_gradientn(colours=c("#DDDDDD", "#00007F", "blue", "#007FFF", "cyan", "#7FFF7F", "yellow", "#FF7F00", "red", "#7F0000"), na.value="#000000FF") +
-        scale_x_log10(limits=range(breaks),breaks=breaks,labels=breaks) +
-        scale_y_log10(limits=range(breaks),breaks=breaks,labels=breaks) +
-        geom_abline(intercept=0, slope=1) +
-        geom_abline(intercept=intercept, slope=slope, colour="red", alpha=0.6, linetype="dashed") +
-        labs(x="Real value", y="Filled value") +
-        ggtitle(title) +
-        theme_bw() +
-        theme(legend.position="none") +
-        annotation_custom(tab, xmin=-Inf, xmax=0.1, ymin=0.8, ymax=Inf)
-}
-
-cv_tab <- function(cv_df) {
-  lm_cv <- lmodel2(log10(validation_pixels) ~ log10(var), data=cv_df)
-  stats_df <- data.frame(matrix(c(as.numeric(broom::glance(lm_cv)[,c("r.squared", "p.value", "nobs")]),
-                                  as.numeric(unlist(broom::tidy(lm_cv)[5:6,"estimate"]))), ncol=1),
-                         row.names=c("R^2", "p-value", "nobs", "intercept", "slope"),
-                         stringsAsFactors = FALSE)
-  tab <- tableGrob(round(stats_df,3), cols=NULL)
-  return(list(stats_df=stats_df,tab=tab))
-}
-
-is_tab <- function(is_df) {
-  lm_is <- lmodel2(log10(sat_chla) ~ log10(HPLC_CHLA), data=is_df)
-  stats_df <- data.frame(matrix(c(as.numeric(broom::glance(lm_is)[,c("r.squared", "p.value", "nobs")]),
-                                  as.numeric(unlist(broom::tidy(lm_is)[5:6,"estimate"]))), ncol=1),
-                         row.names=c("R^2", "p-value", "nobs", "intercept", "slope"),
-                         stringsAsFactors = FALSE)
-  tab <- tableGrob(round(stats_df,3), cols=NULL)
-  return(list(stats_df=stats_df,tab=tab))
-}
-
-matchup_plot <- function(matchups) {
-  lm_insitu <- is_tab(matchups)
-  lm_real <- broom::tidy(lmodel2(log10(sat_chla) ~ log10(HPLC_CHLA), data=matchups %>% dplyr::filter(Satellite=="Real")))
-  lm_filled <- broom::tidy(lmodel2(log10(sat_chla) ~ log10(HPLC_CHLA), data=matchups %>% dplyr::filter(Satellite=="Filled")))
-  
-  ggplot(matchups, aes(x=HPLC_CHLA, y=sat_chla, color=Satellite)) +
-    geom_point() +
-    theme_bw() +
-    geom_abline(intercept=0, slope=1) +
-    geom_abline(intercept=lm_insitu$stats_df[4,], slope=lm_insitu$stats_df[5,], linetype="dashed") +
-    geom_abline(intercept=lm_filled$estimate[5], slope=lm_filled$estimate[6], color="#F8766D", linetype="dashed") +
-    geom_abline(intercept=lm_real$estimate[5], slope=lm_real$estimate[6], color="#00B0F6", linetype="dashed") +
-    scale_x_log10(limits=c(0.05,20)) +
-    scale_y_log10(limits=c(0.05,20)) +
-    labs(x="In situ chla", y="Satellite chla", color="") +
-    annotation_custom(lm_insitu$tab, xmin=-Inf, xmax=0.06, ymin=0.5, ymax=Inf) +
-    theme(legend.position=c(0.85,0.15))
-}
 
 
 #*******************************************************************************
@@ -197,6 +124,7 @@ An analysis of DINEOF on the Canadian Pacific coast:
 
 
 
+
 # 8day vs daily
 
 Chla algorithm: OCx  
@@ -207,81 +135,27 @@ Which is better - filling the gaps in 8day data, or filling gaps in daily data a
 Although some R^2 metrics are higher for the daily filled version, and the RMSE for the total series and the week with good percent coverage are slightly lower, overall the 8day cross-validation data has a better fit and less bias (e.g. it identifies some patterns of higher concentration better than the daily fill), and gives a better reconstruction for weeks with poor percent coverage.  
 
 
-
 #### <b>8day</b>
 
 ```{r}
 
 variable <- "CHL_OCX"
 region <- "PANCAN"
+fill_log <- TRUE
+composite <- "8day"
 input_years <- ifelse(num_years==0, year, paste0(range(plus_minus(year,num_years)), collapse="-"))
 input_name <- paste0("output/filled_", region, "_", sensor, "_", variable, "_", input_years, "_")
 
-fill_log <- TRUE
+tsc <- time_series_comparison(variable=variable,
+                              region=region,
+                              fill_log=fill_log,
+                              composite=composite,
+                              num_years=0)
+attr_df <- tsc$attr_df
+week_rmses <- tsc$week_rmses
 
-# load data
-composite <- "8day"
-file <- paste0(input_name, composite, ifelse(fill_log, "_logged", ""), "_randomCVpts")
-df <- as.data.table(read_fst(paste0(file, ".fst")))
-load(paste0(file, "_attr.rda"))
-
-# format
-num_weeks <- dim(df)[1]/num_pix$NWA$`4km`
-available_weeks <- as.integer(round(sort(unique((df$time-year)*46 + 1))))
-mat_var <- matrix(df$var, ncol=num_weeks)
-mat_var_imputed <- matrix(df$var_imputed, ncol=num_weeks)
-
-# make maps for each week
-map1 <- make_map(data.frame(bin=nwa_bins_4km,
-                            var=mat_var[,available_weeks==weeks[1]],
-                            var_imputed=mat_var_imputed[,available_weeks==weeks[1]],
-                            stringsAsFactors = FALSE),
-                title=paste0("8day filled - week ",weeks[1]),
-                log_raster=TRUE)
-map2 <- make_map(data.frame(bin=nwa_bins_4km,
-                            var=mat_var[,available_weeks==weeks[2]],
-                            var_imputed=mat_var_imputed[,available_weeks==weeks[2]],
-                            stringsAsFactors = FALSE),
-                title=paste0("8day filled - week ",weeks[2]),
-                log_raster=TRUE)
-
-# perform linear regression on all cross-validation pixels, and extract stats
-cv_df <- df %>% dplyr::filter(is.finite(validation_pixels))
-tab <- cv_tab(cv_df)
-p <- cv_plot(cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,"CV regression - all pixels")
-
-# do the same with individual selected weeks to test
-week1_cv_df <- cv_df %>% dplyr::filter(time==(year + (weeks[1]-1)/46))
-week2_cv_df <- cv_df %>% dplyr::filter(time==(year + (weeks[2]-1)/46))
-if (fill_log) {
-  week_rmses <- c(rmse(log10(week1_cv_df$var), log10(week1_cv_df$validation_pixels)),
-                  rmse(log10(week2_cv_df$var), log10(week2_cv_df$validation_pixels)))
-} else {
-  week_rmses <- c(rmse(week1_cv_df$var, week1_cv_df$validation_pixels),
-                  rmse(week2_cv_df$var, week2_cv_df$validation_pixels))
-}
-tab <- cv_tab(week1_cv_df)
-p1 <- cv_plot(week1_cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,paste0("CV regression - week ", weeks[1]))
-tab <- cv_tab(week2_cv_df)
-p2 <- cv_plot(week2_cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,paste0("CV regression - week ", weeks[2]))
-
-# remove repetitive axis titles/scales
-p2 <- p2 + theme(axis.title.y=element_blank(), axis.text.y=element_blank())
-p <- p + theme(axis.title.y=element_blank(), axis.text.y=element_blank())
-
-matchups <- dplyr::left_join(df, in_situ_df %>% dplyr::rename(time=time_week), by=c("bin", "time")) %>%
-  dplyr::filter(is.finite(ID)) %>%
-  dplyr::rename(Real=var, Filled=validation_pixels) %>%
-  tidyr::pivot_longer(cols=c(Real, Filled), names_to="Satellite", values_to="sat_chla", values_drop_na=TRUE) %>%
-  dplyr::arrange(Satellite, time)
-
-isp <- matchup_plot(matchups)
-
-cat("Number of EOF:", attr_df$eof, "\n",
-    "Total RMSE:", attr_df$rmse, "\n",
-    "Week", weeks[1], "RMSE:", week_rmses[1], "\n",
-    "Week", weeks[2], "RMSE:", week_rmses[2])
-grid.arrange(grobs=list(map1,map2,isp,p1,p2,p), nrow=2)
+display_rmse(attr_df, weeks, week_rmses)
+grid.arrange(grobs=tsc[1:6], nrow=2)
 
 ```
 
@@ -332,9 +206,9 @@ if (fill_log) {
   week_rmses <- c(rmse(week1_cv_df$var, week1_cv_df$validation_pixels),
                   rmse(week2_cv_df$var, week2_cv_df$validation_pixels))
 }
-tab <- cv_tab(week1_cv_df)
+tab <- make_tab(y=log10(week1_cv_df$validation_pixels), x=log10(week1_cv_df$var))
 p1 <- cv_plot(week1_cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,paste0("CV regression - week ", weeks[1]))
-tab <- cv_tab(week2_cv_df)
+tab <- make_tab(y=log10(week2_cv_df$validation_pixels), x=log10(week2_cv_df$var))
 p2 <- cv_plot(week2_cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,paste0("CV regression - week ", weeks[2]))
 
 # remove repetitive axis titles/scales
@@ -349,13 +223,12 @@ matchups <- dplyr::left_join(df, in_situ_df %>% dplyr::rename(time=time_day), by
 
 isp <- matchup_plot(matchups)
 
-cat("Number of EOF:", attr_df$eof, "\n",
-    "Total RMSE:", attr_df$rmse, "\n",
-    "Week", weeks[1], "RMSE:", week_rmses[1], "\n",
-    "Week", weeks[2], "RMSE:", week_rmses[2])
+display_rmse(attr_df, weeks, week_rmses)
 grid.arrange(grobs=list(map1,map2,isp,p1,p2,p), nrow=2)
 
 ```
+
+
 
 
 # OCx vs POLY4
@@ -370,161 +243,40 @@ POLY4 = regional band-ratio, tuned to NWA
 Although the POLY4 algorithm increases the RMSE, it also appears to remove some of the bias and provide a tighter fit around the 1:1 line of the CV regression, as well as improving the fit with the in situ matchups. POLY4 was tuned to remove the bias in the NWA that was present when using the OCx algorithm, creating a steeper gradient in chla concentration, which might explain the increase in RMSE as the higher range of chla could be harder to reconstruct.  
 
 
-
 #### <b>OCx</b>
 
 ```{r}
 
-variable <- "CHL_OCX"
-region <- "PANCAN"
-input_years <- ifelse(num_years==0, year, paste0(range(plus_minus(year,num_years)), collapse="-"))
-input_name <- paste0("output/filled_", region, "_", sensor, "_", variable, "_", input_years, "_")
+tsc <- time_series_comparison(variable="CHL_OCX",
+                              region="PANCAN",
+                              fill_log=TRUE,
+                              composite="8day",
+                              num_years=0)
+attr_df <- tsc$attr_df
+week_rmses <- tsc$week_rmses
 
-fill_log <- TRUE
-
-# load data
-composite <- "8day"
-file <- paste0(input_name, composite, ifelse(fill_log, "_logged", ""), "_randomCVpts")
-df <- as.data.table(read_fst(paste0(file, ".fst")))
-load(paste0(file, "_attr.rda"))
-
-# format
-num_weeks <- dim(df)[1]/num_pix$NWA$`4km`
-available_weeks <- as.integer(round(sort(unique((df$time-year)*46 + 1))))
-mat_var <- matrix(df$var, ncol=num_weeks)
-mat_var_imputed <- matrix(df$var_imputed, ncol=num_weeks)
-
-# make maps for each week
-map1 <- make_map(data.frame(bin=nwa_bins_4km,
-                            var=mat_var[,available_weeks==weeks[1]],
-                            var_imputed=mat_var_imputed[,available_weeks==weeks[1]],
-                            stringsAsFactors = FALSE),
-                title=paste0("8day filled - week ",weeks[1]),
-                log_raster=TRUE)
-map2 <- make_map(data.frame(bin=nwa_bins_4km,
-                            var=mat_var[,available_weeks==weeks[2]],
-                            var_imputed=mat_var_imputed[,available_weeks==weeks[2]],
-                            stringsAsFactors = FALSE),
-                title=paste0("8day filled - week ",weeks[2]),
-                log_raster=TRUE)
-
-# perform linear regression on all cross-validation pixels, and extract stats
-cv_df <- df %>% dplyr::filter(is.finite(validation_pixels))
-tab <- cv_tab(cv_df)
-p <- cv_plot(cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,"CV regression - all pixels")
-
-# do the same with individual selected weeks to test
-week1_cv_df <- cv_df %>% dplyr::filter(time==(year + (weeks[1]-1)/46))
-week2_cv_df <- cv_df %>% dplyr::filter(time==(year + (weeks[2]-1)/46))
-if (fill_log) {
-  week_rmses <- c(rmse(log10(week1_cv_df$var), log10(week1_cv_df$validation_pixels)),
-                  rmse(log10(week2_cv_df$var), log10(week2_cv_df$validation_pixels)))
-} else {
-  week_rmses <- c(rmse(week1_cv_df$var, week1_cv_df$validation_pixels),
-                  rmse(week2_cv_df$var, week2_cv_df$validation_pixels))
-}
-tab <- cv_tab(week1_cv_df)
-p1 <- cv_plot(week1_cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,paste0("CV regression - week ", weeks[1]))
-tab <- cv_tab(week2_cv_df)
-p2 <- cv_plot(week2_cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,paste0("CV regression - week ", weeks[2]))
-
-# remove repetitive axis titles/scales
-p2 <- p2 + theme(axis.title.y=element_blank(), axis.text.y=element_blank())
-p <- p + theme(axis.title.y=element_blank(), axis.text.y=element_blank())
-
-matchups <- dplyr::left_join(df, in_situ_df %>% dplyr::rename(time=time_week), by=c("bin", "time")) %>%
-  dplyr::filter(is.finite(ID)) %>%
-  dplyr::rename(Real=var, Filled=validation_pixels) %>%
-  tidyr::pivot_longer(cols=c(Real, Filled), names_to="Satellite", values_to="sat_chla", values_drop_na=TRUE) %>%
-  dplyr::arrange(Satellite, time)
-
-isp <- matchup_plot(matchups)
-
-cat("Number of EOF:", attr_df$eof, "\n",
-    "Total RMSE:", attr_df$rmse, "\n",
-    "Week", weeks[1], "RMSE:", week_rmses[1], "\n",
-    "Week", weeks[2], "RMSE:", week_rmses[2])
-grid.arrange(grobs=list(map1,map2,isp,p1,p2,p), nrow=2)
+display_rmse(attr_df, weeks, week_rmses)
+grid.arrange(grobs=tsc[1:6], nrow=2)
 
 ```
-
 
 #### <b>POLY4</b>
 
 ```{r}
 
-variable <- "CHL_POLY4"
-region <- "NWA"
-input_years <- ifelse(num_years==0, year, paste0(range(plus_minus(year,num_years)), collapse="-"))
-input_name <- paste0("output/filled_", region, "_", sensor, "_", variable, "_", input_years, "_")
+tsc <- time_series_comparison(variable="CHL_POLY4",
+                              region="NWA",
+                              fill_log=TRUE,
+                              composite="8day",
+                              num_years=0)
+attr_df <- tsc$attr_df
+week_rmses <- tsc$week_rmses
 
-fill_log <- TRUE
-
-# load data
-composite <- "8day"
-file <- paste0(input_name, composite, ifelse(fill_log, "_logged", ""), "_randomCVpts")
-df <- as.data.table(read_fst(paste0(file, ".fst")))
-load(paste0(file, "_attr.rda"))
-
-# format
-num_weeks <- dim(df)[1]/num_pix$NWA$`4km`
-available_weeks <- as.integer(round(sort(unique((df$time-year)*46 + 1))))
-mat_var <- matrix(df$var, ncol=num_weeks)
-mat_var_imputed <- matrix(df$var_imputed, ncol=num_weeks)
-
-# make maps for each week
-map1 <- make_map(data.frame(bin=nwa_bins_4km,
-                            var=mat_var[,available_weeks==weeks[1]],
-                            var_imputed=mat_var_imputed[,available_weeks==weeks[1]],
-                            stringsAsFactors = FALSE),
-                title=paste0("8day filled - week ",weeks[1]),
-                log_raster=TRUE)
-map2 <- make_map(data.frame(bin=nwa_bins_4km,
-                            var=mat_var[,available_weeks==weeks[2]],
-                            var_imputed=mat_var_imputed[,available_weeks==weeks[2]],
-                            stringsAsFactors = FALSE),
-                title=paste0("8day filled - week ",weeks[2]),
-                log_raster=TRUE)
-
-# perform linear regression on all cross-validation pixels, and extract stats
-cv_df <- df %>% dplyr::filter(is.finite(validation_pixels))
-tab <- cv_tab(cv_df)
-p <- cv_plot(cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,"CV regression - all pixels")
-
-# do the same with individual selected weeks to test
-week1_cv_df <- cv_df %>% dplyr::filter(time==(year + (weeks[1]-1)/46))
-week2_cv_df <- cv_df %>% dplyr::filter(time==(year + (weeks[2]-1)/46))
-if (fill_log) {
-  week_rmses <- c(rmse(log10(week1_cv_df$var), log10(week1_cv_df$validation_pixels)),
-                  rmse(log10(week2_cv_df$var), log10(week2_cv_df$validation_pixels)))
-} else {
-  week_rmses <- c(rmse(week1_cv_df$var, week1_cv_df$validation_pixels),
-                  rmse(week2_cv_df$var, week2_cv_df$validation_pixels))
-}
-tab <- cv_tab(week1_cv_df)
-p1 <- cv_plot(week1_cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,paste0("CV regression - week ", weeks[1]))
-tab <- cv_tab(week2_cv_df)
-p2 <- cv_plot(week2_cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,paste0("CV regression - week ", weeks[2]))
-
-# remove repetitive axis titles/scales
-p2 <- p2 + theme(axis.title.y=element_blank(), axis.text.y=element_blank())
-p <- p + theme(axis.title.y=element_blank(), axis.text.y=element_blank())
-
-matchups <- dplyr::left_join(df, in_situ_df %>% dplyr::rename(time=time_week), by=c("bin", "time")) %>%
-  dplyr::filter(is.finite(ID)) %>%
-  dplyr::rename(Real=var, Filled=validation_pixels) %>%
-  tidyr::pivot_longer(cols=c(Real, Filled), names_to="Satellite", values_to="sat_chla", values_drop_na=TRUE) %>%
-  dplyr::arrange(Satellite, time)
-
-isp <- matchup_plot(matchups)
-
-cat("Number of EOF:", attr_df$eof, "\n",
-    "Total RMSE:", attr_df$rmse, "\n",
-    "Week", weeks[1], "RMSE:", week_rmses[1], "\n",
-    "Week", weeks[2], "RMSE:", week_rmses[2])
-grid.arrange(grobs=list(map1,map2,isp,p1,p2,p), nrow=2)
+display_rmse(attr_df, weeks, week_rmses)
+grid.arrange(grobs=tsc[1:6], nrow=2)
 
 ```
+
 
 
 
@@ -546,81 +298,20 @@ Note the process for the log option:
 Logged data gives a smoother fill and better R^2 in the CV regressions as it is not negatively impacted by isolated spikes over relatively low and consistent concentrations.  
 
 
-
 #### <b>Log</b>
 
 ```{r}
 
-variable <- "CHL_POLY4"
-region <- "NWA"
-input_years <- ifelse(num_years==0, year, paste0(range(plus_minus(year,num_years)), collapse="-"))
-input_name <- paste0("output/filled_", region, "_", sensor, "_", variable, "_", input_years, "_")
+tsc <- time_series_comparison(variable="CHL_POLY4",
+                              region="NWA",
+                              fill_log=TRUE,
+                              composite="8day",
+                              num_years=0)
+attr_df <- tsc$attr_df
+week_rmses <- tsc$week_rmses
 
-fill_log <- TRUE
-
-# load data
-composite <- "8day"
-file <- paste0(input_name, composite, ifelse(fill_log, "_logged", ""), "_randomCVpts")
-df <- as.data.table(read_fst(paste0(file, ".fst")))
-load(paste0(file, "_attr.rda"))
-
-# format
-num_weeks <- dim(df)[1]/num_pix$NWA$`4km`
-available_weeks <- as.integer(round(sort(unique((df$time-year)*46 + 1))))
-mat_var <- matrix(df$var, ncol=num_weeks)
-mat_var_imputed <- matrix(df$var_imputed, ncol=num_weeks)
-
-# make maps for each week
-map1 <- make_map(data.frame(bin=nwa_bins_4km,
-                            var=mat_var[,available_weeks==weeks[1]],
-                            var_imputed=mat_var_imputed[,available_weeks==weeks[1]],
-                            stringsAsFactors = FALSE),
-                title=paste0("8day filled - week ",weeks[1]),
-                log_raster=TRUE)
-map2 <- make_map(data.frame(bin=nwa_bins_4km,
-                            var=mat_var[,available_weeks==weeks[2]],
-                            var_imputed=mat_var_imputed[,available_weeks==weeks[2]],
-                            stringsAsFactors = FALSE),
-                title=paste0("8day filled - week ",weeks[2]),
-                log_raster=TRUE)
-
-# perform linear regression on all cross-validation pixels, and extract stats
-cv_df <- df %>% dplyr::filter(is.finite(validation_pixels))
-tab <- cv_tab(cv_df)
-p <- cv_plot(cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,"CV regression - all pixels")
-
-# do the same with individual selected weeks to test
-week1_cv_df <- cv_df %>% dplyr::filter(time==(year + (weeks[1]-1)/46))
-week2_cv_df <- cv_df %>% dplyr::filter(time==(year + (weeks[2]-1)/46))
-if (fill_log) {
-  week_rmses <- c(rmse(log10(week1_cv_df$var), log10(week1_cv_df$validation_pixels)),
-                  rmse(log10(week2_cv_df$var), log10(week2_cv_df$validation_pixels)))
-} else {
-  week_rmses <- c(rmse(week1_cv_df$var, week1_cv_df$validation_pixels),
-                  rmse(week2_cv_df$var, week2_cv_df$validation_pixels))
-}
-tab <- cv_tab(week1_cv_df)
-p1 <- cv_plot(week1_cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,paste0("CV regression - week ", weeks[1]))
-tab <- cv_tab(week2_cv_df)
-p2 <- cv_plot(week2_cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,paste0("CV regression - week ", weeks[2]))
-
-# remove repetitive axis titles/scales
-p2 <- p2 + theme(axis.title.y=element_blank(), axis.text.y=element_blank())
-p <- p + theme(axis.title.y=element_blank(), axis.text.y=element_blank())
-
-matchups <- dplyr::left_join(df, in_situ_df %>% dplyr::rename(time=time_week), by=c("bin", "time")) %>%
-  dplyr::filter(is.finite(ID)) %>%
-  dplyr::rename(Real=var, Filled=validation_pixels) %>%
-  tidyr::pivot_longer(cols=c(Real, Filled), names_to="Satellite", values_to="sat_chla", values_drop_na=TRUE) %>%
-  dplyr::arrange(Satellite, time)
-
-isp <- matchup_plot(matchups)
-
-cat("Number of EOF:", attr_df$eof, "\n",
-    "Total RMSE:", attr_df$rmse, "\n",
-    "Week", weeks[1], "RMSE:", week_rmses[1], "\n",
-    "Week", weeks[2], "RMSE:", week_rmses[2])
-grid.arrange(grobs=list(map1,map2,isp,p1,p2,p), nrow=2)
+display_rmse(attr_df, weeks, week_rmses)
+grid.arrange(grobs=tsc[1:6], nrow=2)
 
 ```
 
@@ -628,82 +319,27 @@ grid.arrange(grobs=list(map1,map2,isp,p1,p2,p), nrow=2)
 
 ```{r}
 
-variable <- "CHL_POLY4"
-region <- "NWA"
-input_years <- ifelse(num_years==0, year, paste0(range(plus_minus(year,num_years)), collapse="-"))
-input_name <- paste0("output/filled_", region, "_", sensor, "_", variable, "_", input_years, "_")
+tsc <- time_series_comparison(variable="CHL_POLY4",
+                              region="NWA",
+                              fill_log=FALSE,
+                              composite="8day",
+                              num_years=0)
+attr_df <- tsc$attr_df
+week_rmses <- tsc$week_rmses
 
-fill_log <- FALSE
-
-# load data
-composite <- "8day"
-file <- paste0(input_name, composite, ifelse(fill_log, "_logged", ""), "_randomCVpts")
-df <- as.data.table(read_fst(paste0(file, ".fst")))
-load(paste0(file, "_attr.rda"))
-
-# format
-num_weeks <- dim(df)[1]/num_pix$NWA$`4km`
-available_weeks <- as.integer(round(sort(unique((df$time-year)*46 + 1))))
-mat_var <- matrix(df$var, ncol=num_weeks)
-mat_var_imputed <- matrix(df$var_imputed, ncol=num_weeks)
-
-# make maps for each week
-map1 <- make_map(data.frame(bin=nwa_bins_4km,
-                            var=mat_var[,available_weeks==weeks[1]],
-                            var_imputed=mat_var_imputed[,available_weeks==weeks[1]],
-                            stringsAsFactors = FALSE),
-                title=paste0("8day filled - week ",weeks[1]),
-                log_raster=TRUE)
-map2 <- make_map(data.frame(bin=nwa_bins_4km,
-                            var=mat_var[,available_weeks==weeks[2]],
-                            var_imputed=mat_var_imputed[,available_weeks==weeks[2]],
-                            stringsAsFactors = FALSE),
-                title=paste0("8day filled - week ",weeks[2]),
-                log_raster=TRUE)
-
-# perform linear regression on all cross-validation pixels, and extract stats
-cv_df <- df %>% dplyr::filter(is.finite(validation_pixels))
-tab <- cv_tab(cv_df)
-p <- cv_plot(cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,"CV regression - all pixels")
-
-# do the same with individual selected weeks to test
-week1_cv_df <- cv_df %>% dplyr::filter(time==(year + (weeks[1]-1)/46))
-week2_cv_df <- cv_df %>% dplyr::filter(time==(year + (weeks[2]-1)/46))
-if (fill_log) {
-  week_rmses <- c(rmse(log10(week1_cv_df$var), log10(week1_cv_df$validation_pixels)),
-                  rmse(log10(week2_cv_df$var), log10(week2_cv_df$validation_pixels)))
-} else {
-  week_rmses <- c(rmse(week1_cv_df$var, week1_cv_df$validation_pixels),
-                  rmse(week2_cv_df$var, week2_cv_df$validation_pixels))
-}
-tab <- cv_tab(week1_cv_df)
-p1 <- cv_plot(week1_cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,paste0("CV regression - week ", weeks[1]))
-tab <- cv_tab(week2_cv_df)
-p2 <- cv_plot(week2_cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,paste0("CV regression - week ", weeks[2]))
-
-# remove repetitive axis titles/scales
-p2 <- p2 + theme(axis.title.y=element_blank(), axis.text.y=element_blank())
-p <- p + theme(axis.title.y=element_blank(), axis.text.y=element_blank())
-
-matchups <- dplyr::left_join(df, in_situ_df %>% dplyr::rename(time=time_week), by=c("bin", "time")) %>%
-  dplyr::filter(is.finite(ID)) %>%
-  dplyr::rename(Real=var, Filled=validation_pixels) %>%
-  tidyr::pivot_longer(cols=c(Real, Filled), names_to="Satellite", values_to="sat_chla", values_drop_na=TRUE) %>%
-  dplyr::arrange(Satellite, time)
-
-isp <- matchup_plot(matchups)
-
-cat("Number of EOF:", attr_df$eof, "\n",
-    "Total RMSE:", attr_df$rmse, "\n",
-    "Week", weeks[1], "RMSE:", week_rmses[1], "\n",
-    "Week", weeks[2], "RMSE:", week_rmses[2])
-grid.arrange(grobs=list(map1,map2,isp,p1,p2,p), nrow=2)
+display_rmse(attr_df, weeks, week_rmses)
+grid.arrange(grobs=tsc[1:6], nrow=2)
 
 ```
 
 
 
+
 # Longer time series
+
+Temporal binning: 8day  
+Chla algorithm: POLY4  
+Logged/linear data: Logged  
 
 If more satellite images are used in the algorithm, will it improve the results?  
 
@@ -714,88 +350,15 @@ Note that the 3year/5year DINEOF runs use the same cross-validation pixels for `
 Overall, expanding the time series gives a slight improvement to the results, most notably when using 3 years instead of a single year. Based on the RMSE summary plot at the bottom, a time series of 7 to 9 years could be used to get the optimal results, but the smaller decrease in RMSE with every added year might not be worth the extra processing time.  
 
 
-
-
-```{r}
-
-# function for each dataset
-time_series_comparison <- function(num_years) {
-  variable <- "CHL_POLY4"
-  region <- "NWA"
-  input_years <- ifelse(num_years==0, year, paste0(range(plus_minus(year,num_years)), collapse="-"))
-  input_name <- paste0("output/filled_", region, "_", sensor, "_", variable, "_", input_years, "_")
-  
-  fill_log <- TRUE
-  
-  # load data
-  composite <- "8day"
-  file <- paste0(input_name, composite, ifelse(fill_log, "_logged", ""), "_randomCVpts")
-  df <- as.data.table(read_fst(paste0(file, ".fst")))
-  load(paste0(file, "_attr.rda"))
-  
-  # format
-  num_weeks <- dim(df)[1]/num_pix$NWA$`4km`
-  available_weeks <- as.integer(round(sort(unique((df$time-year)*46 + 1))))
-  mat_var <- matrix(df$var, ncol=num_weeks)
-  mat_var_imputed <- matrix(df$var_imputed, ncol=num_weeks)
-  
-  # make maps for each week
-  map1 <- make_map(data.frame(bin=nwa_bins_4km,
-                              var=mat_var[,available_weeks==weeks[1]],
-                              var_imputed=mat_var_imputed[,available_weeks==weeks[1]],
-                              stringsAsFactors = FALSE),
-                  title=paste0("8day filled - week ",weeks[1]),
-                  log_raster=TRUE)
-  map2 <- make_map(data.frame(bin=nwa_bins_4km,
-                              var=mat_var[,available_weeks==weeks[2]],
-                              var_imputed=mat_var_imputed[,available_weeks==weeks[2]],
-                              stringsAsFactors = FALSE),
-                  title=paste0("8day filled - week ",weeks[2]),
-                  log_raster=TRUE)
-  
-  # perform linear regression on all cross-validation pixels, and extract stats
-  cv_df <- df %>% dplyr::filter(is.finite(validation_pixels))
-  tab <- cv_tab(cv_df)
-  p <- cv_plot(cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,"CV regression - all pixels")
-  
-  # do the same with individual selected weeks to test
-  week1_cv_df <- cv_df %>% dplyr::filter(time==(year + (weeks[1]-1)/46))
-  week2_cv_df <- cv_df %>% dplyr::filter(time==(year + (weeks[2]-1)/46))
-  if (fill_log) {
-    week_rmses <- c(rmse(log10(week1_cv_df$var), log10(week1_cv_df$validation_pixels)),
-                    rmse(log10(week2_cv_df$var), log10(week2_cv_df$validation_pixels)))
-  } else {
-    week_rmses <- c(rmse(week1_cv_df$var, week1_cv_df$validation_pixels),
-                    rmse(week2_cv_df$var, week2_cv_df$validation_pixels))
-  }
-  tab <- cv_tab(week1_cv_df)
-  p1 <- cv_plot(week1_cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,paste0("CV regression - week ", weeks[1]))
-  tab <- cv_tab(week2_cv_df)
-  p2 <- cv_plot(week2_cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,paste0("CV regression - week ", weeks[2]))
-  
-  # remove repetitive axis titles/scales
-  p2 <- p2 + theme(axis.title.y=element_blank(), axis.text.y=element_blank())
-  p <- p + theme(axis.title.y=element_blank(), axis.text.y=element_blank())
-  
-  matchups <- dplyr::left_join(df, in_situ_df %>% dplyr::rename(time=time_week), by=c("bin", "time")) %>%
-    dplyr::filter(is.finite(ID)) %>%
-    dplyr::rename(Real=var, Filled=validation_pixels) %>%
-    tidyr::pivot_longer(cols=c(Real, Filled), names_to="Satellite", values_to="sat_chla", values_drop_na=TRUE) %>%
-    dplyr::arrange(Satellite, time)
-  
-  isp <- matchup_plot(matchups)
-  
-  return(list(map1=map1,map2=map2,isp=isp,p1=p1,p2=p2,p=p,attr_df=attr_df,week_rmses=week_rmses))
-}
-
-```
-
-
 #### <b>1 year</b>
 
 ```{r}
 
-tsc <- time_series_comparison(0)
+tsc <- time_series_comparison(variable="CHL_POLY4",
+                              region="NWA",
+                              fill_log=TRUE,
+                              composite="8day",
+                              num_years=0)
 attr_df <- tsc$attr_df
 week_rmses <- tsc$week_rmses
 
@@ -803,22 +366,21 @@ stats_to_plot <- cbind(rep(1,4),
                        c("EOF", "RMSE", paste0("Week",weeks,"_RMSE"), "Processing_time"),
                        c(attr_df$eof, attr_df$rmse, week_rmses, attr_df$time_to_process))
 
-cat("Number of EOF:", attr_df$eof, "\n",
-    "Total RMSE:", attr_df$rmse, "\n",
-    "Week", weeks[1], "RMSE:", week_rmses[1], "\n",
-    "Week", weeks[2], "RMSE:", week_rmses[2])
-
+display_rmse(attr_df, weeks, week_rmses)
 grid.arrange(grobs=tsc[1:6], nrow=2)
 
 ```
-
 
 #### <b>3 years</b>
 
 ```{r}
 
 num_years <- 1
-tsc <- time_series_comparison(num_years)
+tsc <- time_series_comparison(variable="CHL_POLY4",
+                              region="NWA",
+                              fill_log=TRUE,
+                              composite="8day",
+                              num_years=num_years)
 
 attr_df <- tsc$attr_df
 week_rmses <- tsc$week_rmses
@@ -828,22 +390,21 @@ stats_to_plot <- rbind(stats_to_plot,
                              c("EOF", "RMSE", paste0("Week",weeks,"_RMSE"), "Processing_time"),
                              c(attr_df$eof, attr_df$rmse, week_rmses, attr_df$time_to_process)))
 
-cat("Number of EOF:", attr_df$eof, "\n",
-    "Total RMSE:", attr_df$rmse, "\n",
-    "Week", weeks[1], "RMSE:", week_rmses[1], "\n",
-    "Week", weeks[2], "RMSE:", week_rmses[2])
-
+display_rmse(attr_df, weeks, week_rmses)
 grid.arrange(grobs=tsc[1:6], nrow=2)
 
 ```
-
 
 #### <b>5 years</b>
 
 ```{r}
 
 num_years <- 2
-tsc <- time_series_comparison(num_years)
+tsc <- time_series_comparison(variable="CHL_POLY4",
+                              region="NWA",
+                              fill_log=TRUE,
+                              composite="8day",
+                              num_years=num_years)
 
 attr_df <- tsc$attr_df
 week_rmses <- tsc$week_rmses
@@ -853,23 +414,21 @@ stats_to_plot <- rbind(stats_to_plot,
                              c("EOF", "RMSE", paste0("Week",weeks,"_RMSE"), "Processing_time"),
                              c(attr_df$eof, attr_df$rmse, week_rmses, attr_df$time_to_process)))
 
-cat("Number of EOF:", attr_df$eof, "\n",
-    "Total RMSE:", attr_df$rmse, "\n",
-    "Week", weeks[1], "RMSE:", week_rmses[1], "\n",
-    "Week", weeks[2], "RMSE:", week_rmses[2])
-
+display_rmse(attr_df, weeks, week_rmses)
 grid.arrange(grobs=tsc[1:6], nrow=2)
 
 ```
-
-
 
 #### <b>7 years</b>
 
 ```{r}
 
 num_years <- 3
-tsc <- time_series_comparison(num_years)
+tsc <- time_series_comparison(variable="CHL_POLY4",
+                              region="NWA",
+                              fill_log=TRUE,
+                              composite="8day",
+                              num_years=num_years)
 
 attr_df <- tsc$attr_df
 week_rmses <- tsc$week_rmses
@@ -879,23 +438,21 @@ stats_to_plot <- rbind(stats_to_plot,
                              c("EOF", "RMSE", paste0("Week",weeks,"_RMSE"), "Processing_time"),
                              c(attr_df$eof, attr_df$rmse, week_rmses, attr_df$time_to_process)))
 
-cat("Number of EOF:", attr_df$eof, "\n",
-    "Total RMSE:", attr_df$rmse, "\n",
-    "Week", weeks[1], "RMSE:", week_rmses[1], "\n",
-    "Week", weeks[2], "RMSE:", week_rmses[2])
-
+display_rmse(attr_df, weeks, week_rmses)
 grid.arrange(grobs=tsc[1:6], nrow=2)
 
 ```
-
-
 
 #### <b>9 years</b>
 
 ```{r}
 
 num_years <- 4
-tsc <- time_series_comparison(num_years)
+tsc <- time_series_comparison(variable="CHL_POLY4",
+                              region="NWA",
+                              fill_log=TRUE,
+                              composite="8day",
+                              num_years=num_years)
 
 attr_df <- tsc$attr_df
 week_rmses <- tsc$week_rmses
@@ -905,15 +462,10 @@ stats_to_plot <- rbind(stats_to_plot,
                              c("EOF", "RMSE", paste0("Week",weeks,"_RMSE"), "Processing_time"),
                              c(attr_df$eof, attr_df$rmse, week_rmses, attr_df$time_to_process)))
 
-cat("Number of EOF:", attr_df$eof, "\n",
-    "Total RMSE:", attr_df$rmse, "\n",
-    "Week", weeks[1], "RMSE:", week_rmses[1], "\n",
-    "Week", weeks[2], "RMSE:", week_rmses[2])
-
+display_rmse(attr_df, weeks, week_rmses)
 grid.arrange(grobs=tsc[1:6], nrow=2)
 
 ```
-
 
 
 
@@ -933,7 +485,6 @@ prmse <- ggplot(stats_to_plot %>% dplyr::filter(!(Statistic %in% c("EOF", "Proce
   geom_point(aes(x=`Number of years`, y=Value, color=Statistic)) +
   geom_line(aes(x=`Number of years`, y=Value, color=Statistic, group=Statistic)) +
   theme_bw() +
-  # scale_y_log10() +
   theme(axis.title.y=element_blank())
 
 ptime <- ggplot(stats_to_plot %>% dplyr::filter(Statistic=="Processing_time")) +
@@ -945,5 +496,3 @@ ptime <- ggplot(stats_to_plot %>% dplyr::filter(Statistic=="Processing_time")) +
 print(ptime + prmse)
 
 ```
-
-
