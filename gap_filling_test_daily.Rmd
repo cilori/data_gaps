@@ -1,0 +1,284 @@
+---
+title: "Gap filling with metR::ImputeEOF"
+date: "`r Sys.Date()`"
+output: 
+  flexdashboard::flex_dashboard:
+    vertical_layout: scroll
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, fig.width=16, fig.height=10)
+library(dplyr)
+library(fst)
+library(data.table)
+library(oceancolouR)
+library(ggplot2)
+library(raster)
+library(gridExtra)
+library(lubridate)
+library(latticeExtra)
+library(sp)
+library(lmodel2)
+library(broom)
+library(gridExtra)
+library(geodist)
+library(patchwork)
+source("gap_filling_test_functions.R")
+data("wrld_simpl", package = "maptools")
+
+data("nwa_bins_4km")
+data("nwa_lats_4km")
+data("nwa_lons_4km")
+
+lats <- range(nwa_lats_4km)
+lons <- range(nwa_lons_4km)
+
+sensor <- "MODIS"
+year <- 2015
+days <- c(57, 172)
+low_percov <- 5
+num_years <- 0
+low_chla <- 0
+high_chla <- 64
+
+# maximum distance allowed between satellite pixel and in situ measurement (in metres)
+max_is_dist <- 10000
+
+
+#*******************************************************************************
+# prepare in situ matchup data
+
+in_situ_file <- "../satellite_validation/01_in_situ_data/HPLC_1997-2020_20201110.csv"
+in_situ_df <- read.csv(in_situ_file, header=TRUE) %>%
+  dplyr::filter(YEAR==year) %>%
+  dplyr::mutate(cruise_id = as.character(cruise_id)) %>%
+  dplyr::select(ID, DEPTH, LATDEC, LONGDEC, YEAR, DOY, HPLC_CHLA) %>%
+  dplyr::group_by(YEAR,DOY,LATDEC,LONGDEC) %>%
+  dplyr::summarize_all(.fun=dplyr::first) %>%
+  dplyr::ungroup() %>%
+  dplyr::arrange(YEAR,DOY,DEPTH)
+# add columns for satellite bin and distance to bin
+sat_loc_df <- data.frame(bin=nwa_bins_4km, lon=nwa_lons_4km, lat=nwa_lats_4km, stringsAsFactors = FALSE)
+is_loc_df <- in_situ_df %>% dplyr::distinct(LONGDEC, LATDEC)
+is_loc_df <- dplyr::bind_cols(
+  is_loc_df,
+  lapply(1:nrow(is_loc_df),
+    function(i) {
+      is_lon <- is_loc_df$LONGDEC[i]
+      is_lat <- is_loc_df$LATDEC[i]
+      tmp_sat_df <- sat_loc_df %>% dplyr::filter(abs(lat - is_lat) < 1 & abs(lon - is_lon) < 1)
+      tmp_sat_df$dist <- as.numeric(geodist(x=data.frame(lon=is_lon, lat=is_lat), y=tmp_sat_df %>% dplyr::select(lon, lat), measure="geodesic"))
+      tmp_sat_df[which.min(tmp_sat_df$dist),c("dist","bin")]
+    }) %>%
+  do.call(rbind, .)
+)
+in_situ_df <- dplyr::left_join(in_situ_df, is_loc_df, by=c("LATDEC","LONGDEC")) %>%
+  dplyr::mutate(decimal_time = YEAR + (DOY-1)/ifelse(leap_year(YEAR),366,365)) %>%
+  as.data.frame() %>%
+  dplyr::filter(dist <= max_is_dist)
+
+```
+
+# Description
+
+This displays the resulting <b>daily</b> filled images calculated using the `fill_gaps.R` script.  
+
+Different parameters were tested on the following data (note there are 2 different days, one with good daily coverage and one without):  
+
+    Region: Northwest Atlantic (NWA, 39 to 82 N, 42 to 95 W)  
+    Sensor: `r sensor`   
+    Resolution: 4km   
+    Processing level: Level 3, binned (L3b)  
+    Year: `r year`  
+    Days: `r paste0(days, collapse=", ")`  
+    Pixels outside `r paste0(c(low_chla, high_chla), collapse="-")` mg m^-3 removed  
+    Days with < `r low_percov`% coverage removed  
+
+Filling the gaps in log space (and transforming the results back to linear space), we'll compare the results of OCx and POLY4, and try adding an extra year of data on either side of the target year to check if a longer time series helps improve the reconstruction.  
+
+Each performance summary has the following:  
+
+  - original image(s) vs filled image(s)  
+  - 2 separate maps: one early in the year and one later, to check performance on days with low and medium/high spatial coverage  
+  - linear regression of filled pixels vs original pixels (in log space) using randomly-spaced CV (cross-validation) pixels  
+  - various metrics:  
+      - RMSE and number of EOFs used  
+      - R^2, p-value, number of observations (nobs), intercept, and slope of the cross-validation regression  
+  - linear regression of in situ samples VS filled satellite data (in situ samples restricted to matches <= `r max_is_dist/1000` km away)  
+
+### Extra details
+
+ImputeEOF removes randomly sampled valid pixels for cross-validation. The number of pixels used is the maximum of 30, or 10% of the pixels. The function continues adding EOFs and calculating the resulting RMSE between real and reconstructed cross-validation pixels until the difference between the current RMSE and RMSE of the previous iteration is below a certain threshold (i.e. adding the most recent EOF did not significantly improve the RMSE). The threshold, called the "tolerance", is set to 0.001 here.  
+
+The linear regression uses the standard major axis method (SMA) from `lmodel2::lmodel2()`, since it minimizes the area of the triangle instead of the distance in the x or y direction alone (i.e. it assumes there is error in both the independent and dependent variables, the "real" and filled/reconstructed data).  
+
+The chla POLY4 algorithm uses the same formulation as OCx, but with coefficients tuned to the NWA to remove the bias (whereas OCx is tuned with global in situ data). Therefore, it provides a better fit with the in situ data in the NWA.  
+
+Hilborn and Costa (2018) found that pixel reconstruction improved with more data in a smaller region on the Canadian Pacific coast, so we will test this in the larger NWA region. Note that the 3year DINEOF runs use the same cross-validation pixels for a single year (`r year` alone) with extra randomly-selected pixels from the remaining years. Also, the CV regression is performed using only the CV pixels for `r year` to give a more accurate comparison between methods.  
+
+An analysis of DINEOF on the Canadian Pacific coast:  
+[Hilborn A, Costa M. Applications of DINEOF to Satellite-Derived Chlorophyll-a from a Productive Coastal Region. Remote Sensing. 2018; 10(9):1449. https://doi.org/10.3390/rs10091449](https://www.mdpi.com/2072-4292/10/9/1449)  
+
+
+
+
+# OCx
+
+
+#### <b>1 year</b>
+
+```{r}
+
+tsc <- time_series_comparison(variable="CHL_OCX",
+                              region="PANCAN",
+                              fill_log=TRUE,
+                              composite="daily",
+                              num_years=0,
+                              times=days)
+attr_df <- tsc$attr_df
+day_rmses <- tsc$time_rmses
+
+stats_to_plot <- cbind(rep(1,5),
+                       c("EOF", "RMSE", paste0("Day",days,"_RMSE"), "Processing_time"),
+                       c(attr_df$eof, attr_df$rmse, day_rmses, attr_df$time_to_process))
+
+display_rmse(attr_df, days, day_rmses, composite="daily")
+grid.arrange(grobs=tsc[1:6], nrow=2)
+
+```
+
+#### <b>3 years</b>
+
+```{r}
+
+num_years <- 1
+tsc <- time_series_comparison(variable="CHL_OCX",
+                              region="PANCAN",
+                              fill_log=TRUE,
+                              composite="daily",
+                              num_years=num_years,
+                              times=days)
+
+attr_df <- tsc$attr_df
+day_rmses <- tsc$time_rmses
+
+stats_to_plot <- rbind(stats_to_plot,
+                       cbind(rep(num_years*2+1,5),
+                             c("EOF", "RMSE", paste0("Day",days,"_RMSE"), "Processing_time"),
+                             c(attr_df$eof, attr_df$rmse, day_rmses, attr_df$time_to_process)))
+
+display_rmse(attr_df, days, day_rmses, composite="daily")
+grid.arrange(grobs=tsc[1:6], nrow=2)
+
+```
+
+#### <b>Summary</b>
+
+```{r fig.width=10, fig.height=4}
+
+stats_to_plot <- data.frame(stats_to_plot, stringsAsFactors = FALSE)
+colnames(stats_to_plot) <- c("Number of years", "Statistic", "Value")
+stats_to_plot$Value <- as.numeric(stats_to_plot$Value)
+stats_to_plot$Statistic <- as.factor(stats_to_plot$Statistic)
+
+cat("Number of EOFs for 1/3 years:", paste0((stats_to_plot %>% dplyr::filter(Statistic == "EOF"))$Value, collapse="/"))
+
+prmse <- ggplot(stats_to_plot %>% dplyr::filter(!(Statistic %in% c("EOF", "Processing_time")))) +
+  geom_point(aes(x=`Number of years`, y=Value, color=Statistic)) +
+  geom_line(aes(x=`Number of years`, y=Value, color=Statistic, group=Statistic)) +
+  theme_bw() +
+  theme(axis.title.y=element_blank())
+
+ptime <- ggplot(stats_to_plot %>% dplyr::filter(Statistic=="Processing_time")) +
+  geom_point(aes(x=`Number of years`, y=Value/60, group=1)) +
+  geom_line(aes(x=`Number of years`, y=Value/60, group=1)) +
+  theme_bw() +
+  labs(y="Processing time\n(minutes)")
+
+print(ptime + prmse)
+
+```
+
+
+
+
+# POLY4
+
+
+#### <b>1 year</b>
+
+```{r}
+
+tsc <- time_series_comparison(variable="CHL_POLY4",
+                              region="NWA",
+                              fill_log=TRUE,
+                              composite="daily",
+                              num_years=0,
+                              times=days)
+attr_df <- tsc$attr_df
+day_rmses <- tsc$time_rmses
+
+stats_to_plot <- cbind(rep(1,5),
+                       c("EOF", "RMSE", paste0("Day",days,"_RMSE"), "Processing_time"),
+                       c(attr_df$eof, attr_df$rmse, day_rmses, attr_df$time_to_process))
+
+display_rmse(attr_df, days, day_rmses, composite="daily")
+grid.arrange(grobs=tsc[1:6], nrow=2)
+
+```
+
+#### <b>3 years</b>
+
+```{r}
+
+num_years <- 1
+tsc <- time_series_comparison(variable="CHL_POLY4",
+                              region="NWA",
+                              fill_log=TRUE,
+                              composite="daily",
+                              num_years=num_years,
+                              times=days)
+
+attr_df <- tsc$attr_df
+day_rmses <- tsc$time_rmses
+
+stats_to_plot <- rbind(stats_to_plot,
+                       cbind(rep(num_years*2+1,5),
+                             c("EOF", "RMSE", paste0("Day",days,"_RMSE"), "Processing_time"),
+                             c(attr_df$eof, attr_df$rmse, day_rmses, attr_df$time_to_process)))
+
+display_rmse(attr_df, days, day_rmses, composite="daily")
+grid.arrange(grobs=tsc[1:6], nrow=2)
+
+```
+
+
+
+
+#### <b>Summary</b>
+
+```{r fig.width=10, fig.height=4}
+
+stats_to_plot <- data.frame(stats_to_plot, stringsAsFactors = FALSE)
+colnames(stats_to_plot) <- c("Number of years", "Statistic", "Value")
+stats_to_plot$Value <- as.numeric(stats_to_plot$Value)
+stats_to_plot$Statistic <- as.factor(stats_to_plot$Statistic)
+
+cat("Number of EOFs for 1/3 years:", paste0((stats_to_plot %>% dplyr::filter(Statistic == "EOF"))$Value, collapse="/"))
+
+prmse <- ggplot(stats_to_plot %>% dplyr::filter(!(Statistic %in% c("EOF", "Processing_time")))) +
+  geom_point(aes(x=`Number of years`, y=Value, color=Statistic)) +
+  geom_line(aes(x=`Number of years`, y=Value, color=Statistic, group=Statistic)) +
+  theme_bw() +
+  theme(axis.title.y=element_blank())
+
+ptime <- ggplot(stats_to_plot %>% dplyr::filter(Statistic=="Processing_time")) +
+  geom_point(aes(x=`Number of years`, y=Value/60, group=1)) +
+  geom_line(aes(x=`Number of years`, y=Value/60, group=1)) +
+  theme_bw() +
+  labs(y="Processing time\n(minutes)")
+
+print(ptime + prmse)
+
+```
+

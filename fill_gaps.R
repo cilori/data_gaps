@@ -13,10 +13,10 @@ source("ImputeEOF2.R")
 source("load_and_subset.R")
 
 
-region <- "NWA"
+region <- "PANCAN"
 
 # For MODIS/SeaWiFS/VIIRS-SNPP: CHL_OCX, CHL_POLY4, CHL_GSM_GS, PAR
-variable <- "CHL_POLY4"
+variable <- "CHL_OCX"
 
 # MODIS, VIIRS-SNPP, SeaWiFS
 sensor <- "MODIS"
@@ -25,7 +25,7 @@ sensor <- "MODIS"
 year <- 2015
 
 path <- "/mnt/data3/claysa"
-output_path <- "output"
+output_path <- "method_testing_output"
 
 
 #**************
@@ -44,13 +44,13 @@ high_chla <- 64
 # for 8day, how many years to use on either side of the target year?
 # if filling gaps for weekly data, you can load a few years at a time
 # if filling gaps in daily data, you can only load ~ 1 year
-num_years <- 1 # default = 4 (for 8day filling)
+num_years <- 0 # default = 4 (for 8day filling)
 
 # log the data before filling? (for CHL)
 fill_log <- TRUE
 
 # fill gaps in 8day or daily images
-composite <- "8day"
+composite <- "daily"
 
 
 

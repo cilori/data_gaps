@@ -75,8 +75,8 @@ is_loc_df <- dplyr::bind_cols(
 )
 in_situ_df <- dplyr::left_join(in_situ_df, is_loc_df, by=c("LATDEC","LONGDEC")) %>%
   dplyr::mutate(week8 = week8(lubridate::as_date(paste(YEAR, DOY), format="%Y %j")),
-                time_week = YEAR + (week8-1)/46,
-                time_day = YEAR + (DOY-1)/ifelse(leap_year(YEAR),366,365)) %>%
+                decimal_time = YEAR + (week8-1)/46,
+                decimal_time_day = YEAR + (DOY-1)/ifelse(leap_year(YEAR),366,365)) %>%
   as.data.frame() %>%
   dplyr::filter(dist <= max_is_dist)
 
@@ -144,15 +144,16 @@ region <- "PANCAN"
 fill_log <- TRUE
 composite <- "8day"
 input_years <- ifelse(num_years==0, year, paste0(range(plus_minus(year,num_years)), collapse="-"))
-input_name <- paste0("output/filled_", region, "_", sensor, "_", variable, "_", input_years, "_")
+input_name <- paste0("method_testing_output/filled_", region, "_", sensor, "_", variable, "_", input_years, "_")
 
 tsc <- time_series_comparison(variable=variable,
                               region=region,
                               fill_log=fill_log,
                               composite=composite,
-                              num_years=0)
+                              num_years=0,
+                              times=weeks)
 attr_df <- tsc$attr_df
-week_rmses <- tsc$week_rmses
+week_rmses <- tsc$time_rmses
 
 display_rmse(attr_df, weeks, week_rmses)
 grid.arrange(grobs=tsc[1:6], nrow=2)
@@ -215,7 +216,7 @@ p2 <- cv_plot(week2_cv_df,tab$stats_df[4,],tab$stats_df[5,],tab$tab,paste0("CV r
 p2 <- p2 + theme(axis.title.y=element_blank(), axis.text.y=element_blank())
 p <- p + theme(axis.title.y=element_blank(), axis.text.y=element_blank())
 
-matchups <- dplyr::left_join(df, in_situ_df %>% dplyr::rename(time=time_day), by=c("bin", "time")) %>%
+matchups <- dplyr::left_join(df, in_situ_df %>% dplyr::rename(time=decimal_time_day), by=c("bin", "time")) %>%
   dplyr::filter(is.finite(ID)) %>%
   dplyr::rename(Real=var, Filled=validation_pixels) %>%
   tidyr::pivot_longer(cols=c(Real, Filled), names_to="Satellite", values_to="sat_chla", values_drop_na=TRUE) %>%
@@ -251,9 +252,10 @@ tsc <- time_series_comparison(variable="CHL_OCX",
                               region="PANCAN",
                               fill_log=TRUE,
                               composite="8day",
-                              num_years=0)
+                              num_years=0,
+                              times=weeks)
 attr_df <- tsc$attr_df
-week_rmses <- tsc$week_rmses
+week_rmses <- tsc$time_rmses
 
 display_rmse(attr_df, weeks, week_rmses)
 grid.arrange(grobs=tsc[1:6], nrow=2)
@@ -268,9 +270,10 @@ tsc <- time_series_comparison(variable="CHL_POLY4",
                               region="NWA",
                               fill_log=TRUE,
                               composite="8day",
-                              num_years=0)
+                              num_years=0,
+                              times=weeks)
 attr_df <- tsc$attr_df
-week_rmses <- tsc$week_rmses
+week_rmses <- tsc$time_rmses
 
 display_rmse(attr_df, weeks, week_rmses)
 grid.arrange(grobs=tsc[1:6], nrow=2)
@@ -306,9 +309,10 @@ tsc <- time_series_comparison(variable="CHL_POLY4",
                               region="NWA",
                               fill_log=TRUE,
                               composite="8day",
-                              num_years=0)
+                              num_years=0,
+                              times=weeks)
 attr_df <- tsc$attr_df
-week_rmses <- tsc$week_rmses
+week_rmses <- tsc$time_rmses
 
 display_rmse(attr_df, weeks, week_rmses)
 grid.arrange(grobs=tsc[1:6], nrow=2)
@@ -323,9 +327,10 @@ tsc <- time_series_comparison(variable="CHL_POLY4",
                               region="NWA",
                               fill_log=FALSE,
                               composite="8day",
-                              num_years=0)
+                              num_years=0,
+                              times=weeks)
 attr_df <- tsc$attr_df
-week_rmses <- tsc$week_rmses
+week_rmses <- tsc$time_rmses
 
 display_rmse(attr_df, weeks, week_rmses)
 grid.arrange(grobs=tsc[1:6], nrow=2)
@@ -358,11 +363,12 @@ tsc <- time_series_comparison(variable="CHL_POLY4",
                               region="NWA",
                               fill_log=TRUE,
                               composite="8day",
-                              num_years=0)
+                              num_years=0,
+                              times=weeks)
 attr_df <- tsc$attr_df
-week_rmses <- tsc$week_rmses
+week_rmses <- tsc$time_rmses
 
-stats_to_plot <- cbind(rep(1,4),
+stats_to_plot <- cbind(rep(1,5),
                        c("EOF", "RMSE", paste0("Week",weeks,"_RMSE"), "Processing_time"),
                        c(attr_df$eof, attr_df$rmse, week_rmses, attr_df$time_to_process))
 
@@ -380,13 +386,14 @@ tsc <- time_series_comparison(variable="CHL_POLY4",
                               region="NWA",
                               fill_log=TRUE,
                               composite="8day",
-                              num_years=num_years)
+                              num_years=num_years,
+                              times=weeks)
 
 attr_df <- tsc$attr_df
-week_rmses <- tsc$week_rmses
+week_rmses <- tsc$time_rmses
 
 stats_to_plot <- rbind(stats_to_plot,
-                       cbind(rep(num_years*2+1,4),
+                       cbind(rep(num_years*2+1,5),
                              c("EOF", "RMSE", paste0("Week",weeks,"_RMSE"), "Processing_time"),
                              c(attr_df$eof, attr_df$rmse, week_rmses, attr_df$time_to_process)))
 
@@ -404,13 +411,14 @@ tsc <- time_series_comparison(variable="CHL_POLY4",
                               region="NWA",
                               fill_log=TRUE,
                               composite="8day",
-                              num_years=num_years)
+                              num_years=num_years,
+                              times=weeks)
 
 attr_df <- tsc$attr_df
-week_rmses <- tsc$week_rmses
+week_rmses <- tsc$time_rmses
 
 stats_to_plot <- rbind(stats_to_plot,
-                       cbind(rep(num_years*2+1,4),
+                       cbind(rep(num_years*2+1,5),
                              c("EOF", "RMSE", paste0("Week",weeks,"_RMSE"), "Processing_time"),
                              c(attr_df$eof, attr_df$rmse, week_rmses, attr_df$time_to_process)))
 
@@ -428,13 +436,14 @@ tsc <- time_series_comparison(variable="CHL_POLY4",
                               region="NWA",
                               fill_log=TRUE,
                               composite="8day",
-                              num_years=num_years)
+                              num_years=num_years,
+                              times=weeks)
 
 attr_df <- tsc$attr_df
-week_rmses <- tsc$week_rmses
+week_rmses <- tsc$time_rmses
 
 stats_to_plot <- rbind(stats_to_plot,
-                       cbind(rep(num_years*2+1,4),
+                       cbind(rep(num_years*2+1,5),
                              c("EOF", "RMSE", paste0("Week",weeks,"_RMSE"), "Processing_time"),
                              c(attr_df$eof, attr_df$rmse, week_rmses, attr_df$time_to_process)))
 
@@ -452,13 +461,14 @@ tsc <- time_series_comparison(variable="CHL_POLY4",
                               region="NWA",
                               fill_log=TRUE,
                               composite="8day",
-                              num_years=num_years)
+                              num_years=num_years,
+                              times=weeks)
 
 attr_df <- tsc$attr_df
-week_rmses <- tsc$week_rmses
+week_rmses <- tsc$time_rmses
 
 stats_to_plot <- rbind(stats_to_plot,
-                       cbind(rep(num_years*2+1,4),
+                       cbind(rep(num_years*2+1,5),
                              c("EOF", "RMSE", paste0("Week",weeks,"_RMSE"), "Processing_time"),
                              c(attr_df$eof, attr_df$rmse, week_rmses, attr_df$time_to_process)))
 
